@@ -1,0 +1,244 @@
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+        <!-- PyScript css and js -->
+        <link rel="stylesheet" href="https://pyscript.net/latest/pyscript.css" />
+        <script defer src="https://pyscript.net/latest/pyscript.js"></script>
+        <!-- BokehJS css and js -->
+        <script type="text/javascript" src="https://cdn.bokeh.org/bokeh/release/bokeh-3.0.3.min.js"></script>
+        <script type="text/javascript" src="https://cdn.bokeh.org/bokeh/release/bokeh-gl-3.0.3.min.js"></script>
+        <script type="text/javascript" src="https://cdn.bokeh.org/bokeh/release/bokeh-widgets-3.0.3.min.js"></script>
+        <script type="text/javascript" src="https://cdn.bokeh.org/bokeh/release/bokeh-tables-3.0.3.min.js"></script>
+        <script type="text/javascript" src="https://cdn.bokeh.org/bokeh/release/bokeh-mathjax-3.0.3.min.js"></script>
+
+        <title>Plot BokehJS</title>
+
+        <!-- Python enviroment -->
+        <py-config>
+            packages = ["bokeh", 
+                        "numpy", 
+                        "pandas",
+                        "xyzservices"]
+        </py-config>
+        <!-- bootstrap css -->
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-9ndCyUaIbzAi2FUVXJi0CjmCapSmO7SnpJef0486qhLnuZ2cdeRhO02iuK6FUUVM" crossorigin="anonymous">
+    </head>
+<body>
+    <h2>Plot : Bokeh Chart</h2>
+    <div class="row overflow-hidden" id="content">
+        <div class="row">
+            <div class="col-sm-1">
+                <label>Starting point pattern:</label>
+            </div>
+            <div class="col-sm-2">
+                <input type="number" id="start_pattern" name="start_pattern">
+            </div>
+            <div class="col-sm-1">
+                <label>Ending point pattern:</label>
+            </div>
+            <div class="col-sm-2">
+                <input type="number" id="end_pattern" name="end_pattern">
+            </div>
+            <div class="col-sm-3">
+                <input type="checkbox" id="znor" name="znor" value="znor">
+                <label>with Z-normalization</label><br>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-sm-1">
+                <label>Plot widht:</label>
+            </div>
+            <div class="col-sm-2">
+                <input type="number" id="width_input" name="width_input", value =1000>
+            </div>
+            <div class="col-sm-1">
+                <label>Plot height:</label>
+            </div>
+            <div class="col-sm-2">
+                <input type="number" id="height_input" name="height_input", value=400>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-sm-1">
+                <label>x axis label:</label>
+            </div>
+            <div class="col-sm-2">
+                <input type="text" id="x_axis_label" name="x_axis_label" value="Timestamp">
+            </div>
+            <div class="col-sm-1">
+                <label>y axis label:</label>
+            </div>
+            <div class="col-sm-2">
+                <input type="text" id="y_axis_label" name="y_axis_label" value="Flux">
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-sm-4">
+                <label for="upload">File Upload:</label>
+                <input type="file" class="form-control-file" name="fileUpload" id="fileUpload">
+            </div>
+            <div class="col-sm-2">
+                <button py-click="process_file2()" type="button" class="btn btn-primary btn-sm">Upload</button>
+                <button onclick="clearDivChildren('myplot')" type="button" class="btn btn-secondary btn-sm">Clear all plots</button>
+            </div>
+        </div>
+    </div>
+    <py-terminal>
+    <div id="myplot"></div>
+    <py-script>
+    import asyncio
+    import json
+    import pyodide
+    import pandas as pd
+    import numpy as np
+    from js import Bokeh, console, JSON, document, FileReader
+    from bokeh.embed import json_item
+    from bokeh.plotting import figure
+    from bokeh.resources import CDN
+    from bokeh.models import ColumnDataSource
+    from pyodide.ffi import create_proxy
+    import io
+    import js
+    import csv
+
+    TOOLTIPS = [
+        ("index", "$index"),
+        ("(x,y)", "$x, $y"),
+    ]
+
+    def z_normalize(data):
+        """
+        Perform z-normalization on a list of numerical data.
+        
+        Args:
+            data (list): List of numerical data.
+        
+        Returns:
+            list: Z-normalized data.
+        """
+        data_array = np.array(data)
+        mean = np.mean(data_array)
+        std = np.std(data_array)
+        z_normalized_data = (data_array - mean) / std
+        return z_normalized_data.tolist()
+
+    def read_csv_data_to_list(csv_data,is_znor):
+        """
+        Read CSV data and convert it to a list of floats.
+        Optionally perform z-normalization on the data.
+
+        Args:
+            csv_data (str): CSV data as a string.
+            is_znor (bool): Flag indicating whether to perform z-normalization.
+
+        Returns:
+            list: List of floats (optionally z-normalized).
+        """
+        data = []
+        csv_reader = csv.reader(csv_data)
+        for row in csv_reader:
+            data.append(float(row[0]))
+        if is_znor:
+            return z_normalize(data)
+        else:
+            return data
+
+
+    def plot_LC(list_data, start_pattern, end_pattern,x_axis_label,y_axis_label, width, height):
+        """
+        Plot the light curve with optional transient pattern.
+
+        Args:
+            list_data (list): The list of data points for the light curve.
+            start_pattern (int or None): The index of the starting point of the transient pattern.
+            end_tran (int or None): The index of the ending point of transient pattern.
+            x_axis_label (str): The label for the x-axis.
+            y_axis_label (str): The label for the y-axis.
+            width (int or str): The width of the plot.
+            height (int or str): The height of the plot.
+        """
+        plot_raw = figure(width=int(width), height=int(height), tooltips=TOOLTIPS, title="Artifact flare", x_axis_label=x_axis_label,
+                          y_axis_label=y_axis_label)
+        timestamps = list(range(0, len(list_data)))
+        raw_datasource = ColumnDataSource(data=dict(x=timestamps, y=list_data))
+
+        #### Plot RAW DATA https://docs.bokeh.org/en/latest/docs/reference/models/glyphs/line.html#line
+        plot_raw.line('x', 'y', source=raw_datasource, line_alpha=0.4, color="black", line_width=2,
+                      legend_label="raw")
+
+        #### Plot RAW DATA https://docs.bokeh.org/en/latest/docs/reference/models/glyphs/circle.html#circle
+        plot_raw.circle('x', 'y', source=raw_datasource, color="black", fill_alpha=0.5, size=2,
+                        legend_label="raw")
+
+        #### Check if there is transient pattern data from input
+        if not ((start_pattern == '') or (start_pattern == None) or (end_pattern == '') or (end_pattern == None)):
+            start_pattern = int(start_pattern)
+            end_pattern = int(end_pattern)
+            flare_ans_datasource = ColumnDataSource(
+            data=dict(x=timestamps[start_pattern:end_pattern],y=list_data[start_pattern:end_pattern]))
+
+            #### Plot Transient period https://docs.bokeh.org/en/latest/docs/reference/models/glyphs/line.html#line
+            plot_raw.line('x', 'y', source=flare_ans_datasource, line_alpha=0.5, color="red", line_width=2,
+                          legend_label="Transient pattern")
+
+        #### Configure the font, labels, and legend                 
+        plot_raw.legend.border_line_width = 3
+        plot_raw.legend.click_policy = "hide"
+        plot_raw.legend.border_line_color = "navy"
+        plot_raw.legend.border_line_alpha = 0.0
+        plot_raw.xaxis.axis_label_text_font_size = "15pt"
+        plot_raw.xaxis.major_label_text_font_size = "12pt"
+        plot_raw.yaxis.axis_label_text_font_size = "15pt"
+        plot_raw.yaxis.major_label_text_font_size = "12pt"
+        p_json = json.dumps(json_item(plot_raw, "myplot"))
+
+        Bokeh.embed.embed_item(JSON.parse(p_json))
+
+    def process_file2():
+        asyncio.ensure_future(process_file())
+
+
+    async def process_file():
+        is_znor = document.getElementById("znor").checked
+        width = document.getElementById("width_input").value
+        height = document.getElementById("height_input").value
+        x_axis_label = document.getElementById("x_axis_label").value
+        if is_znor:
+            y_axis_label = "Normalized {}".format(document.getElementById("y_axis_label").value)
+        else:
+            y_axis_label = document.getElementById("y_axis_label").value
+        file_input = document.getElementById("fileUpload");
+        if (file_input.files.length > 0):
+            start_pattern = document.getElementById("start_pattern").value
+            end_pattern = document.getElementById("end_pattern").value
+            files = file_input.files.to_py()
+            for file in files:
+                file_content = await file.text()
+                data_list = read_csv_data_to_list(io.StringIO(file_content),is_znor)
+                plot_LC(data_list, start_pattern, end_pattern, x_axis_label, y_axis_label, width, height)
+                print("Plot data complete") 
+        else:
+            print("No file selected.")
+
+
+    </py-script>
+
+    <!-- Clear div children script -->
+    <script>
+        function clearDivChildren(divId) {
+                var div = document.getElementById(divId);
+                while (div.firstChild) {
+                div.firstChild.remove();
+            }
+        }
+    </script>
+
+
+    <!-- Bootstap script -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz" crossorigin="anonymous"></script>
+</body>
+</html>
